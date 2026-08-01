@@ -33,7 +33,7 @@ Entries are filtered at generation time (the same moment SillyTavern decides whi
 **Via SillyTavern's extension installer (recommended):**
 
 1. Open the **Extensions** panel (puzzle piece icon) → **Install Extension**.
-2. Paste this repo's URL: `https://github.com/ZeadenBeake/SillyTavern-LoreGoverner`
+2. Paste this repo's URL: `https://github.com/ZeadenBeake/SillyTavern-LoreGovernor`
 3. Install for yourself, or globally if you're an admin on a shared instance.
 
 **Manual install:**
