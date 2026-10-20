@@ -9,12 +9,8 @@ const CHAT_METADATA_KEY = 'lore_governor';
 const BUCKET_ALWAYS_ON = 'always_on';
 const BUCKET_ALWAYS_OFF = 'always_off';
 const BUCKET_UNMANAGED = 'unmanaged';
-const STATUS_BUTTON_ID = 'lore-governor-status-toggle';
-const STATUS_PANEL_ID = 'lore-governor-status-panel';
 let lastEffectiveStates = new Map();
 let hasCapturedEffectiveStates = false;
-let statusPanelOpen = false;
-let qrObserver = null;
 
 const BUCKET_LABELS = {
     [BUCKET_ALWAYS_ON]: 'Always On',
@@ -133,7 +129,6 @@ function onWorldInfoEntriesLoaded(payload) {
             }
         }
     }
-    renderStatusPanel();
 }
 
 function statusForEntry(bookName, uid) {
@@ -141,13 +136,11 @@ function statusForEntry(bookName, uid) {
     return lastEffectiveStates.has(key) ? lastEffectiveStates.get(key) : null;
 }
 
-function renderStatusPanel() {
-    const $panel = $(`#${STATUS_PANEL_ID}`);
-    if (!$panel.length) return;
+function renderStatusPanel($panel) {
     const settings = getSettings();
     const selection = getChatSelection();
     $panel.empty();
-    $panel.append(`<div class="lore-governor-status-header"><strong>当前世界书状态</strong><button type="button" class="menu_button lore-governor-status-close" aria-label="Close">×</button></div>`);
+    $panel.append(`<div class="lore-governor-status-header"><strong>当前世界书状态</strong></div>`);
 
     if (!hasGovernedBooks()) {
         $panel.append('<div class="lore-governor-empty">还没有配置受管世界书。</div>');
@@ -171,7 +164,7 @@ function renderStatusPanel() {
             const stateLabel = active === null ? '未加载' : active ? '启用' : '关闭';
             const stateClass = active === null ? 'is-unknown' : active ? 'is-on' : 'is-off';
             const label = entryState?.label ?? `UID ${uid}`;
-            const bucketName = bucket === BUCKET_ALWAYS_ON || bucket === BUCKET_ALWAYS_OFF ? BUCKET_LABELS[bucket] : getSettings().entryBooks.find(b => b.name === bookCfg.name)?.groups.find(g => g.id === bucket)?.name ?? '分组';
+            const bucketName = bucket === BUCKET_ALWAYS_ON || bucket === BUCKET_ALWAYS_OFF ? BUCKET_LABELS[bucket] : settings.entryBooks.find(b => b.name === bookCfg.name)?.groups.find(g => g.id === bucket)?.name ?? '分组';
             $list.append(`<div class="lore-governor-status-entry"><span class="lore-governor-status-name" title="${DOMPurify.sanitize(bucketName)} · UID ${DOMPurify.sanitize(String(uid))}">${DOMPurify.sanitize(label)}</span><span class="lore-governor-status-pill ${stateClass}">${stateLabel}</span></div>`);
             rows++;
         }
@@ -191,34 +184,22 @@ function renderStatusPanel() {
     $panel.append('<div class="lore-governor-status-note">生成时会捕获实际生效状态；切换聊天后，未重新生成前显示的是本聊天保存的选择。</div>');
 }
 
-function setStatusPanelOpen(open) {
-    statusPanelOpen = open;
-    const $panel = $(`#${STATUS_PANEL_ID}`);
-    $panel.toggleClass('is-open', open).attr('aria-hidden', String(!open));
-    $(`#${STATUS_BUTTON_ID}`).toggleClass('is-active', open).attr('aria-expanded', String(open));
-    if (open) renderStatusPanel();
-}
-
-function ensureStatusUi() {
-    if (!$(`#${STATUS_PANEL_ID}`).length) {
-        $('body').append(`<div id="${STATUS_PANEL_ID}" class="lore-governor-status-panel" aria-hidden="true"></div>`);
-        $(`#${STATUS_PANEL_ID}`).on('click', '.lore-governor-status-close', () => setStatusPanelOpen(false));
-    }
-
-    // Quick Reply may be rendered after third-party extensions; observe DOM changes instead of polling.
-    const $qr = $('#qr--bar');
-    if ($qr.length && !$(`#${STATUS_BUTTON_ID}`).length) {
-        const $button = $(`<button id="${STATUS_BUTTON_ID}" class="qr--button lore-governor-qr-button" type="button" title="查看当前世界书状态" aria-expanded="false"><i class="fa-solid fa-book-open"></i><span> Lore 状态</span></button>`);
-        $button.on('click', () => setStatusPanelOpen(!statusPanelOpen));
-        $qr.append($button);
-    }
+async function openStatusPanel() {
+    const $container = $('<div class="lore-governor-status-popup"></div>');
+    renderStatusPanel($container);
+    const context = getContext();
+    await context.callGenericPopup($container, POPUP_TYPE.TEXT, '', {
+        wide: true,
+        large: false,
+        okButton: '关闭',
+        cancelButton: false,
+        allowVerticalScrolling: true,
+    });
 }
 
 function onChatChanged() {
     lastEffectiveStates = new Map();
     hasCapturedEffectiveStates = false;
-    ensureStatusUi();
-    renderStatusPanel();
 }
 
 /**
@@ -342,7 +323,6 @@ async function openLorePicker() {
     saveChatSelection(pending);
     lastEffectiveStates = new Map();
     hasCapturedEffectiveStates = false;
-    renderStatusPanel();
     toastr.success('Lore selection saved for this chat.');
 }
 
@@ -386,6 +366,9 @@ async function renderSettings() {
                 <div class="lore-governor-block">
                     <button class="menu_button lore-governor-open-picker-btn">
                         <i class="fa-solid fa-book-open"></i> Configure lore for current chat
+                    </button>
+                    <button class="menu_button lore-governor-open-status-btn">
+                        <i class="fa-solid fa-list-check"></i> 查看当前世界书状态
                     </button>
                 </div>
             </div>
@@ -600,6 +583,7 @@ async function renderSettings() {
     });
 
     $drawer.on('click', '.lore-governor-open-picker-btn', () => openLorePicker());
+    $drawer.on('click', '.lore-governor-open-status-btn', () => openStatusPanel());
 
     renderEntryBooksList();
     renderToggleBooksList();
@@ -609,12 +593,6 @@ async function renderSettings() {
 
 jQuery(async () => {
     await renderSettings();
-    ensureStatusUi();
-    if (typeof MutationObserver !== 'undefined') {
-        qrObserver = new MutationObserver(() => ensureStatusUi());
-        qrObserver.observe(document.body, { childList: true, subtree: true });
-    }
-
     eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, onWorldInfoEntriesLoaded);
     eventSource.on(event_types.CHAT_CREATED, onChatCreated);
     eventSource.on(event_types.GROUP_CHAT_CREATED, onChatCreated);

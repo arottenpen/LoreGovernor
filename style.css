@@ -127,56 +127,19 @@
     padding: 0.25em 0;
 }
 
-/* Compact status panel, opened from the Quick Reply bar. */
-.lore-governor-qr-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35em;
-}
-
-.lore-governor-qr-button.is-active {
-    border-color: var(--SmartThemeQuoteColor, var(--SmartThemeBorderColor));
-}
-
-.lore-governor-status-panel {
-    display: none;
-    position: fixed;
-    right: 0.75rem;
-    bottom: 5.5rem;
-    z-index: 10050;
-    width: min(22rem, calc(100vw - 1.5rem));
-    max-height: min(65vh, 34rem);
-    overflow: auto;
-    padding: 0.75rem;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 0.6rem;
-    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor));
-    color: var(--SmartThemeBodyTextColor);
-    box-shadow: 0 0.4rem 1.5rem rgba(0, 0, 0, 0.35);
-    backdrop-filter: blur(10px);
-}
-
-.lore-governor-status-panel.is-open {
-    display: block;
+/* Status view uses SillyTavern's native popup, opened from the extension settings (magic wand). */
+.lore-governor-status-popup {
+    text-align: left;
+    max-height: 65vh;
+    overflow-y: auto;
+    min-width: min(22rem, 75vw);
 }
 
 .lore-governor-status-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    position: sticky;
-    top: -0.75rem;
-    margin: -0.75rem -0.75rem 0.5rem;
-    padding: 0.65rem 0.75rem;
-    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor));
+    font-weight: 700;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.4rem;
     border-bottom: 1px solid var(--SmartThemeBorderColor);
-    z-index: 1;
-}
-
-.lore-governor-status-close {
-    padding: 0.1rem 0.45rem;
-    line-height: 1.2;
 }
 
 .lore-governor-status-section {
@@ -211,22 +174,16 @@
     font-size: 0.88em;
 }
 
-.lore-governor-status-name small {
-    opacity: 0.6;
-    white-space: nowrap;
-}
-
 .lore-governor-status-pill {
     flex: 0 0 auto;
-    font-size: 0.75em;
-    padding: 0.12rem 0.4rem;
     border-radius: 999px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.78em;
     border: 1px solid var(--SmartThemeBorderColor);
-    white-space: nowrap;
 }
 
 .lore-governor-status-pill.is-on {
-    color: var(--SmartThemeEmColor, var(--SmartThemeBodyTextColor));
+    color: var(--SmartThemeQuoteColor, #6c6);
 }
 
 .lore-governor-status-pill.is-off {
@@ -235,11 +192,11 @@
 
 .lore-governor-status-pill.is-unknown {
     opacity: 0.55;
-    border-style: dashed;
+    font-style: italic;
 }
 
 .lore-governor-status-note {
-    margin-top: 0.6rem;
-    font-size: 0.75em;
     opacity: 0.65;
+    font-size: 0.82em;
+    margin-top: 0.75rem;
 }
