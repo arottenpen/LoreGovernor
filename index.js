@@ -9,6 +9,13 @@ const CHAT_METADATA_KEY = 'lore_governor';
 const BUCKET_ALWAYS_ON = 'always_on';
 const BUCKET_ALWAYS_OFF = 'always_off';
 const BUCKET_UNMANAGED = 'unmanaged';
+const STATUS_BUTTON_ID = 'lore-governor-status-toggle';
+const STATUS_PANEL_ID = 'lore-governor-status-panel';
+let lastEffectiveStates = new Map();
+let hasCapturedEffectiveStates = false;
+let statusPanelOpen = false;
+let qrObserver = null;
+
 const BUCKET_LABELS = {
     [BUCKET_ALWAYS_ON]: 'Always On',
     [BUCKET_ALWAYS_OFF]: 'Always Off',
@@ -87,8 +94,6 @@ function entryLabel(entry) {
  * Never touches the underlying lorebook file.
  */
 function onWorldInfoEntriesLoaded(payload) {
-    if (!hasGovernedBooks()) return;
-
     const settings = getSettings();
     const selection = getChatSelection();
     const allEntries = [
@@ -98,28 +103,122 @@ function onWorldInfoEntriesLoaded(payload) {
         ...(payload?.personaLore || []),
     ];
 
-    for (const entry of allEntries) {
-        const bookName = entry.world;
-        const uid = String(entry.uid);
+    // Capture the effective in-memory state after applying this chat's governance.
+    lastEffectiveStates = new Map();
+    hasCapturedEffectiveStates = true;
+    if (hasGovernedBooks()) {
+        for (const entry of allEntries) {
+            const bookName = entry.world;
+            const uid = String(entry.uid);
+            const bookCfg = settings.entryBooks.find(b => b.name === bookName);
 
-        const bookCfg = settings.entryBooks.find(b => b.name === bookName);
-        if (bookCfg) {
-            const bucket = getBucket(bookCfg, uid);
-            if (bucket === BUCKET_UNMANAGED) continue; // left alone, whatever the book file says
-            if (bucket === BUCKET_ALWAYS_ON) { entry.disable = false; continue; }
-            if (bucket === BUCKET_ALWAYS_OFF) { entry.disable = true; continue; }
-            // Custom group: bucket is the group id.
-            const selectedUids = selection?.groups?.[bookName]?.[bucket] ?? [];
-            entry.disable = !selectedUids.includes(uid);
-            continue;
-        }
+            if (bookCfg) {
+                const bucket = getBucket(bookCfg, uid);
+                if (bucket === BUCKET_UNMANAGED) continue; // never govern or report unmanaged entries
+                if (bucket === BUCKET_ALWAYS_ON) entry.disable = false;
+                else if (bucket === BUCKET_ALWAYS_OFF) entry.disable = true;
+                else {
+                    const selectedUids = selection?.groups?.[bookName]?.[bucket] ?? [];
+                    entry.disable = !selectedUids.includes(uid);
+                }
+                lastEffectiveStates.set(`${bookName}\u0000${uid}`, { enabled: entry.disable !== true, label: entryLabel(entry) });
+                continue;
+            }
 
-        if (settings.toggleBooks.includes(bookName)) {
-            const toggleState = selection?.toggles?.[bookName];
-            const isEnabled = toggleState !== false; // default on when unset
-            if (!isEnabled) entry.disable = true;
+            if (settings.toggleBooks.includes(bookName)) {
+                const toggleState = selection?.toggles?.[bookName];
+                const isEnabled = toggleState !== false; // default on when unset
+                if (!isEnabled) entry.disable = true;
+                lastEffectiveStates.set(`${bookName}\u0000${uid}`, { enabled: isEnabled && entry.disable !== true, label: entryLabel(entry) });
+            }
         }
     }
+    renderStatusPanel();
+}
+
+function statusForEntry(bookName, uid) {
+    const key = `${bookName}\u0000${String(uid)}`;
+    return lastEffectiveStates.has(key) ? lastEffectiveStates.get(key) : null;
+}
+
+function renderStatusPanel() {
+    const $panel = $(`#${STATUS_PANEL_ID}`);
+    if (!$panel.length) return;
+    const settings = getSettings();
+    const selection = getChatSelection();
+    $panel.empty();
+    $panel.append(`<div class="lore-governor-status-header"><strong>当前世界书状态</strong><button type="button" class="menu_button lore-governor-status-close" aria-label="Close">×</button></div>`);
+
+    if (!hasGovernedBooks()) {
+        $panel.append('<div class="lore-governor-empty">还没有配置受管世界书。</div>');
+        return;
+    }
+
+    let rows = 0;
+    for (const bookCfg of settings.entryBooks) {
+        const managed = Object.entries(bookCfg.assignments).filter(([, bucket]) => bucket !== BUCKET_UNMANAGED);
+        if (!managed.length) continue;
+        const $section = $('<section class="lore-governor-status-section"></section>');
+        $section.append(`<div class="lore-governor-status-book">${DOMPurify.sanitize(bookCfg.name)}</div>`);
+        const $list = $('<div class="lore-governor-status-list"></div>');
+        for (const [uid, bucket] of managed) {
+            const entryState = statusForEntry(bookCfg.name, uid);
+            let expected = null;
+            if (bucket === BUCKET_ALWAYS_ON) expected = true;
+            else if (bucket === BUCKET_ALWAYS_OFF) expected = false;
+            else expected = (selection?.groups?.[bookCfg.name]?.[bucket] ?? []).includes(String(uid));
+            const active = entryState === null ? (hasCapturedEffectiveStates ? null : expected) : entryState.enabled;
+            const stateLabel = active === null ? '未加载' : active ? '启用' : '关闭';
+            const stateClass = active === null ? 'is-unknown' : active ? 'is-on' : 'is-off';
+            const label = entryState?.label ?? `UID ${uid}`;
+            const bucketName = bucket === BUCKET_ALWAYS_ON || bucket === BUCKET_ALWAYS_OFF ? BUCKET_LABELS[bucket] : getSettings().entryBooks.find(b => b.name === bookCfg.name)?.groups.find(g => g.id === bucket)?.name ?? '分组';
+            $list.append(`<div class="lore-governor-status-entry"><span class="lore-governor-status-name" title="${DOMPurify.sanitize(bucketName)} · UID ${DOMPurify.sanitize(String(uid))}">${DOMPurify.sanitize(label)}</span><span class="lore-governor-status-pill ${stateClass}">${stateLabel}</span></div>`);
+            rows++;
+        }
+        $section.append($list);
+        $panel.append($section);
+    }
+
+    for (const bookName of settings.toggleBooks) {
+        const enabled = (selection?.toggles?.[bookName] ?? true) !== false;
+        const $section = $('<section class="lore-governor-status-section"></section>');
+        $section.append(`<div class="lore-governor-status-entry"><span class="lore-governor-status-name">${DOMPurify.sanitize(bookName)}</span><span class="lore-governor-status-pill ${enabled ? 'is-on' : 'is-off'}">${enabled ? '整本启用' : '整本关闭'}</span></div>`);
+        $panel.append($section);
+        rows++;
+    }
+
+    if (!rows) $panel.append('<div class="lore-governor-empty">暂时没有已分组的条目。Unmanaged 条目不会显示。</div>');
+    $panel.append('<div class="lore-governor-status-note">生成时会捕获实际生效状态；切换聊天后，未重新生成前显示的是本聊天保存的选择。</div>');
+}
+
+function setStatusPanelOpen(open) {
+    statusPanelOpen = open;
+    const $panel = $(`#${STATUS_PANEL_ID}`);
+    $panel.toggleClass('is-open', open).attr('aria-hidden', String(!open));
+    $(`#${STATUS_BUTTON_ID}`).toggleClass('is-active', open).attr('aria-expanded', String(open));
+    if (open) renderStatusPanel();
+}
+
+function ensureStatusUi() {
+    if (!$(`#${STATUS_PANEL_ID}`).length) {
+        $('body').append(`<div id="${STATUS_PANEL_ID}" class="lore-governor-status-panel" aria-hidden="true"></div>`);
+        $(`#${STATUS_PANEL_ID}`).on('click', '.lore-governor-status-close', () => setStatusPanelOpen(false));
+    }
+
+    // Quick Reply may be rendered after third-party extensions; observe DOM changes instead of polling.
+    const $qr = $('#qr--bar');
+    if ($qr.length && !$(`#${STATUS_BUTTON_ID}`).length) {
+        const $button = $(`<button id="${STATUS_BUTTON_ID}" class="qr--button lore-governor-qr-button" type="button" title="查看当前世界书状态" aria-expanded="false"><i class="fa-solid fa-book-open"></i><span> Lore 状态</span></button>`);
+        $button.on('click', () => setStatusPanelOpen(!statusPanelOpen));
+        $qr.append($button);
+    }
+}
+
+function onChatChanged() {
+    lastEffectiveStates = new Map();
+    hasCapturedEffectiveStates = false;
+    ensureStatusUi();
+    renderStatusPanel();
 }
 
 /**
@@ -241,6 +340,9 @@ async function openLorePicker() {
     });
 
     saveChatSelection(pending);
+    lastEffectiveStates = new Map();
+    hasCapturedEffectiveStates = false;
+    renderStatusPanel();
     toastr.success('Lore selection saved for this chat.');
 }
 
@@ -507,10 +609,16 @@ async function renderSettings() {
 
 jQuery(async () => {
     await renderSettings();
+    ensureStatusUi();
+    if (typeof MutationObserver !== 'undefined') {
+        qrObserver = new MutationObserver(() => ensureStatusUi());
+        qrObserver.observe(document.body, { childList: true, subtree: true });
+    }
 
     eventSource.on(event_types.WORLDINFO_ENTRIES_LOADED, onWorldInfoEntriesLoaded);
     eventSource.on(event_types.CHAT_CREATED, onChatCreated);
     eventSource.on(event_types.GROUP_CHAT_CREATED, onChatCreated);
+    if (event_types.CHAT_CHANGED) eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
 
     const context = getContext();
     context.SlashCommandParser.addCommandObject(context.SlashCommand.fromProps({

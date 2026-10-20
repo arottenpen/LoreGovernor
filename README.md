@@ -26,6 +26,7 @@ Entries are filtered at generation time (the same moment SillyTavern decides whi
 - **Whole-lorebook toggles** — separately, pick entire lorebooks to be turned on/off per chat with no entry-level detail.
 - **Automatic prompt on new chats** — the picker pops up once when you start a brand-new chat with a character. Switching between existing chats doesn't re-prompt.
 - **Manual reconfigure** — reopen the picker for the current chat any time via the settings panel button or the `/loregovernor` slash command.
+- **Quick Reply status panel** — use the `Lore 状态` button in the Quick Reply bar to inspect governed entries and whole-book toggles for the current chat. Unmanaged entries are intentionally omitted.
 - **Never touches the lorebook file** — governance is applied in memory at generation time; the underlying World Info file's `disable` flags are never written to.
 
 ## Installation
@@ -60,7 +61,7 @@ Click **Groups** on an entry-governed lorebook. From there:
 
 Start a new chat with a character that uses a governed lorebook — the picker pops up automatically, grouped by lorebook and group name. Your choices are saved to that chat and re-applied every time you reopen it.
 
-To change a chat's selection later, use the **Configure lore for current chat** button in the settings panel, or run `/loregovernor`.
+To change a chat's selection later, use the **Configure lore for current chat** button in the settings panel, or run `/loregovernor`. To inspect the current selection, open **Lore 状态** from the Quick Reply bar. After a generation, the panel shows the effective in-memory state captured from World Info loading; immediately after switching chats or saving a new selection, it falls back to that chat's saved choices until the next generation.
 
 ## License
 
