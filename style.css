@@ -200,3 +200,22 @@
     font-size: 0.82em;
     margin-top: 0.75rem;
 }
+
+.lore-governor-buttons-row {
+    display: flex;
+    gap: 0.5em;
+    flex-wrap: wrap;
+}
+
+.lore-governor-buttons-row .menu_button {
+    flex: 1;
+    min-width: 0;
+}
+
+.lore-governor-status-filter {
+    margin-bottom: 0.75rem;
+}
+
+.lore-governor-status-filter select {
+    width: 100%;
+}

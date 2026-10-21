@@ -13,9 +13,9 @@ let lastEffectiveStates = new Map();
 let hasCapturedEffectiveStates = false;
 
 const BUCKET_LABELS = {
-    [BUCKET_ALWAYS_ON]: 'Always On',
-    [BUCKET_ALWAYS_OFF]: 'Always Off',
-    [BUCKET_UNMANAGED]: 'Unmanaged',
+    [BUCKET_ALWAYS_ON]: '始终启用',
+    [BUCKET_ALWAYS_OFF]: '始终关闭',
+    [BUCKET_UNMANAGED]: '不受管理',
 };
 
 function defaultSettings() {
@@ -59,7 +59,7 @@ function getBucket(bookCfg, uid) {
 
 function bucketLabel(bookCfg, bucket) {
     if (BUCKET_LABELS[bucket]) return BUCKET_LABELS[bucket];
-    return bookCfg.groups.find(g => g.id === bucket)?.name ?? 'Unmanaged';
+    return bookCfg.groups.find(g => g.id === bucket)?.name ?? '不受管理';
 }
 
 function getChatSelection() {
@@ -136,10 +136,30 @@ function statusForEntry(bookName, uid) {
     return lastEffectiveStates.has(key) ? lastEffectiveStates.get(key) : null;
 }
 
-function renderStatusPanel($panel) {
+async function renderStatusPanel($panel, filterBookName = null) {
     const settings = getSettings();
     const selection = getChatSelection();
     $panel.empty();
+
+    // 添加世界书筛选下拉菜单
+    const allBookNames = [...new Set([
+        ...settings.entryBooks.map(b => b.name),
+        ...settings.toggleBooks
+    ])];
+
+    if (allBookNames.length > 1) {
+        const $filterRow = $('<div class="lore-governor-status-filter"></div>');
+        const $select = $('<select class="text_pole lore-governor-book-filter"></select>');
+        $select.append('<option value="">-- 查看全部世界书 --</option>');
+        for (const bookName of allBookNames) {
+            const $opt = $(`<option value="${DOMPurify.sanitize(bookName)}">${DOMPurify.sanitize(bookName)}</option>`);
+            if (bookName === filterBookName) $opt.prop('selected', true);
+            $select.append($opt);
+        }
+        $filterRow.append($select);
+        $panel.append($filterRow);
+    }
+
     $panel.append(`<div class="lore-governor-status-header"><strong>当前世界书状态</strong></div>`);
 
     if (!hasGovernedBooks()) {
@@ -149,8 +169,15 @@ function renderStatusPanel($panel) {
 
     let rows = 0;
     for (const bookCfg of settings.entryBooks) {
+        if (filterBookName && bookCfg.name !== filterBookName) continue;
+
         const managed = Object.entries(bookCfg.assignments).filter(([, bucket]) => bucket !== BUCKET_UNMANAGED);
         if (!managed.length) continue;
+
+        // 从世界书文件读取条目信息
+        const entries = await getBookEntries(bookCfg.name);
+        const entryMap = new Map(entries.map(e => [String(e.uid), e]));
+
         const $section = $('<section class="lore-governor-status-section"></section>');
         $section.append(`<div class="lore-governor-status-book">${DOMPurify.sanitize(bookCfg.name)}</div>`);
         const $list = $('<div class="lore-governor-status-list"></div>');
@@ -163,7 +190,11 @@ function renderStatusPanel($panel) {
             const active = entryState === null ? (hasCapturedEffectiveStates ? null : expected) : entryState.enabled;
             const stateLabel = active === null ? '未加载' : active ? '启用' : '关闭';
             const stateClass = active === null ? 'is-unknown' : active ? 'is-on' : 'is-off';
-            const label = entryState?.label ?? `UID ${uid}`;
+
+            // 优先使用从世界书读取的条目名称
+            const entry = entryMap.get(String(uid));
+            const label = entry ? entryLabel(entry) : (entryState?.label ?? `UID ${uid}`);
+
             const bucketName = bucket === BUCKET_ALWAYS_ON || bucket === BUCKET_ALWAYS_OFF ? BUCKET_LABELS[bucket] : settings.entryBooks.find(b => b.name === bookCfg.name)?.groups.find(g => g.id === bucket)?.name ?? '分组';
             $list.append(`<div class="lore-governor-status-entry"><span class="lore-governor-status-name" title="${DOMPurify.sanitize(bucketName)} · UID ${DOMPurify.sanitize(String(uid))}">${DOMPurify.sanitize(label)}</span><span class="lore-governor-status-pill ${stateClass}">${stateLabel}</span></div>`);
             rows++;
@@ -173,6 +204,8 @@ function renderStatusPanel($panel) {
     }
 
     for (const bookName of settings.toggleBooks) {
+        if (filterBookName && bookName !== filterBookName) continue;
+
         const enabled = (selection?.toggles?.[bookName] ?? true) !== false;
         const $section = $('<section class="lore-governor-status-section"></section>');
         $section.append(`<div class="lore-governor-status-entry"><span class="lore-governor-status-name">${DOMPurify.sanitize(bookName)}</span><span class="lore-governor-status-pill ${enabled ? 'is-on' : 'is-off'}">${enabled ? '整本启用' : '整本关闭'}</span></div>`);
@@ -180,13 +213,20 @@ function renderStatusPanel($panel) {
         rows++;
     }
 
-    if (!rows) $panel.append('<div class="lore-governor-empty">暂时没有已分组的条目。Unmanaged 条目不会显示。</div>');
+    if (!rows) $panel.append('<div class="lore-governor-empty">暂时没有已分组的条目。不受管理的条目不会显示。</div>');
     $panel.append('<div class="lore-governor-status-note">生成时会捕获实际生效状态；切换聊天后，未重新生成前显示的是本聊天保存的选择。</div>');
 }
 
 async function openStatusPanel() {
     const $container = $('<div class="lore-governor-status-popup"></div>');
-    renderStatusPanel($container);
+    await renderStatusPanel($container, null);
+
+    // 监听筛选下拉菜单变化
+    $container.on('change', '.lore-governor-book-filter', async function() {
+        const selectedBook = $(this).val() || null;
+        await renderStatusPanel($container, selectedBook);
+    });
+
     const context = getContext();
     await context.callGenericPopup($container, POPUP_TYPE.TEXT, '', {
         wide: true,
@@ -209,7 +249,7 @@ function onChatChanged() {
 async function openLorePicker() {
     const settings = getSettings();
     if (!hasGovernedBooks()) {
-        toastr.info('No lorebooks are configured for governance yet. Set some up in the Lore Governor extension settings.');
+        toastr.info('还没有配置受管世界书。请先在 Lore Governor 扩展设置中添加世界书。');
         return;
     }
 
@@ -242,7 +282,7 @@ async function openLorePicker() {
 
             if (group.mode === 'one') {
                 const $select = $('<select class="text_pole lore-governor-group-select"></select>');
-                $select.append('<option value="">-- none --</option>');
+                $select.append('<option value="">-- 无 --</option>');
                 for (const entry of members) {
                     const uid = String(entry.uid);
                     const $opt = $(`<option value="${uid}"></option>`).text(entryLabel(entry));
@@ -285,7 +325,7 @@ async function openLorePicker() {
     }
 
     if (settings.toggleBooks.length) {
-        const $section = $('<div class="lore-governor-section"><h4>Lorebooks</h4></div>');
+        const $section = $('<div class="lore-governor-section"><h4>世界书整本开关</h4></div>');
         const $list = $('<div class="lore-governor-entry-list"></div>');
 
         for (const bookName of settings.toggleBooks) {
@@ -307,7 +347,7 @@ async function openLorePicker() {
     }
 
     if (!$container.children().length) {
-        toastr.info('Nothing to pick yet: configure some groups (with entries assigned to them) or toggle-books in the Lore Governor settings.');
+        toastr.info('还没有可选择的内容:请先在 Lore Governor 设置中配置分组(并为其分配条目)或整本开关世界书。');
         return;
     }
 
@@ -315,7 +355,7 @@ async function openLorePicker() {
     await context.callGenericPopup($container, POPUP_TYPE.TEXT, '', {
         wide: true,
         large: false,
-        okButton: 'Save',
+        okButton: '保存',
         cancelButton: false,
         allowVerticalScrolling: true,
     });
@@ -323,7 +363,7 @@ async function openLorePicker() {
     saveChatSelection(pending);
     lastEffectiveStates = new Map();
     hasCapturedEffectiveStates = false;
-    toastr.success('Lore selection saved for this chat.');
+    toastr.success('已为本次聊天保存世界书选择。');
 }
 
 function onChatCreated() {
@@ -339,44 +379,46 @@ async function renderSettings() {
     const $drawer = $(`
         <div class="lore-governor-settings inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>Lore Governor</b>
+                <b>世界书管理器 (Lore Governor)</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
                 <div class="lore-governor-block">
-                    <h4>Entry-governed lorebooks</h4>
-                    <small>Create groups per lorebook, assign entries to them, then pick per-chat which are active. Entries left Unmanaged are never touched.</small>
+                    <h4>条目级管理的世界书</h4>
+                    <small>为每本世界书创建分组,将条目分配到分组中,然后在每次聊天时选择要启用的条目。未分配(不受管理)的条目不会被触动。</small>
                     <div class="lore-governor-row">
                         <select class="lore-governor-add-entry-book text_pole"></select>
-                        <button class="menu_button lore-governor-add-entry-book-btn">Add</button>
+                        <button class="menu_button lore-governor-add-entry-book-btn">添加</button>
                     </div>
                     <div class="lore-governor-entry-books-list"></div>
                 </div>
                 <hr>
                 <div class="lore-governor-block">
-                    <h4>Toggle-governed lorebooks</h4>
-                    <small>Pick which whole lorebooks are on/off per-chat, no entry-level detail.</small>
+                    <h4>整本开关的世界书</h4>
+                    <small>为每次聊天选择哪些整本世界书开启/关闭,不涉及条目级细节。</small>
                     <div class="lore-governor-row">
                         <select class="lore-governor-add-toggle-book text_pole"></select>
-                        <button class="menu_button lore-governor-add-toggle-book-btn">Add</button>
+                        <button class="menu_button lore-governor-add-toggle-book-btn">添加</button>
                     </div>
                     <div class="lore-governor-toggle-books-list"></div>
                 </div>
                 <hr>
                 <div class="lore-governor-block">
-                    <button class="menu_button lore-governor-open-picker-btn">
-                        <i class="fa-solid fa-book-open"></i> Configure lore for current chat
-                    </button>
-                    <button class="menu_button lore-governor-open-status-btn">
-                        <i class="fa-solid fa-list-check"></i> 查看当前世界书状态
-                    </button>
+                    <div class="lore-governor-buttons-row">
+                        <button class="menu_button lore-governor-open-picker-btn">
+                            <i class="fa-solid fa-book-open"></i> 为聊天配置世界书
+                        </button>
+                        <button class="menu_button lore-governor-open-status-btn">
+                            <i class="fa-solid fa-list-check"></i> 查看世界书状态
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     `);
 
     function populateBookSelect($select, excludeNames) {
-        $select.empty().append('<option value="">-- select a lorebook --</option>');
+        $select.empty().append('<option value="">-- 选择一本世界书 --</option>');
         for (const name of world_names) {
             if (excludeNames.includes(name)) continue;
             $select.append(`<option value="${DOMPurify.sanitize(name)}">${DOMPurify.sanitize(name)}</option>`);
@@ -463,35 +505,35 @@ async function renderSettings() {
         const $container = $('<div class="lore-governor-popup lore-governor-groups-manager"></div>');
 
         const $groupsBlock = $('<div class="lore-governor-block"></div>');
-        $groupsBlock.append('<h4>Groups</h4>');
-        $groupsBlock.append('<small>Always On, Always Off, and Unmanaged are built-in. Create custom groups below for entries you want the per-chat picker to ask about.</small>');
+        $groupsBlock.append('<h4>分组</h4>');
+        $groupsBlock.append('<small>始终启用、始终关闭和不受管理是内置选项。在下方创建自定义分组，用于在每次聊天时询问您要启用哪些条目。</small>');
         const $groupsList = $('<div class="lore-governor-groups-list"></div>');
         $groupsBlock.append($groupsList);
         $groupsBlock.append(`
             <div class="lore-governor-row lore-governor-add-group-row">
-                <input type="text" class="text_pole lore-governor-new-group-name" placeholder="Group name">
+                <input type="text" class="text_pole lore-governor-new-group-name" placeholder="分组名称">
                 <select class="text_pole lore-governor-new-group-mode">
-                    <option value="any">Select any</option>
-                    <option value="one">Select one</option>
+                    <option value="any">多选</option>
+                    <option value="one">单选</option>
                 </select>
-                <button class="menu_button lore-governor-add-group-btn">Add Group</button>
+                <button class="menu_button lore-governor-add-group-btn">添加分组</button>
             </div>
-            <textarea class="text_pole lore-governor-new-group-desc" placeholder="Optional description shown when picking (e.g. &quot;Pick your character's homeland&quot;)" rows="1"></textarea>
+            <textarea class="text_pole lore-governor-new-group-desc" placeholder="可选的描述,在选择时显示(例如"选择角色的故乡")" rows="1"></textarea>
         `);
         $container.append($groupsBlock);
         $container.append('<hr>');
 
         const $entriesBlock = $('<div class="lore-governor-block"></div>');
-        $entriesBlock.append('<h4>Entries</h4>');
+        $entriesBlock.append('<h4>条目</h4>');
         const $entriesList = $('<div class="lore-governor-entries-assign-list"></div>');
         $entriesBlock.append($entriesList);
         $container.append($entriesBlock);
 
         function bucketOptionsHtml(selectedBucket) {
             const options = [
-                [BUCKET_ALWAYS_ON, 'Always On'],
-                [BUCKET_ALWAYS_OFF, 'Always Off'],
-                [BUCKET_UNMANAGED, 'Unmanaged'],
+                [BUCKET_ALWAYS_ON, '始终启用'],
+                [BUCKET_ALWAYS_OFF, '始终关闭'],
+                [BUCKET_UNMANAGED, '不受管理'],
                 ...bookCfg.groups.map(g => [g.id, g.name]),
             ];
             return options.map(([value, label]) =>
@@ -502,14 +544,16 @@ async function renderSettings() {
         function renderGroupsList() {
             $groupsList.empty();
             if (!bookCfg.groups.length) {
-                $groupsList.append('<div class="lore-governor-empty">No custom groups yet.</div>');
+                $groupsList.append('<div class="lore-governor-empty">还没有自定义分组。</div>');
                 return;
             }
             for (const group of bookCfg.groups) {
                 const memberCount = entries.filter(e => getBucket(bookCfg, String(e.uid)) === group.id).length;
+                const modeText = group.mode === 'one' ? '单选' : '多选';
+                const countText = memberCount === 1 ? '条目' : '条目';
                 const $row = $(`
                     <div class="lore-governor-book-row">
-                        <span class="lore-governor-book-name">${DOMPurify.sanitize(group.name)} <small>(${group.mode === 'one' ? 'select one' : 'select any'}, ${memberCount} ${memberCount === 1 ? 'entry' : 'entries'})</small></span>
+                        <span class="lore-governor-book-name">${DOMPurify.sanitize(group.name)} <small>(${modeText}, ${memberCount} ${countText})</small></span>
                         <button class="menu_button lore-governor-remove-group-btn" data-group="${group.id}"><i class="fa-solid fa-trash"></i></button>
                     </div>
                     ${group.description ? `<div class="lore-governor-group-desc">${DOMPurify.sanitize(group.description)}</div>` : ''}
@@ -572,7 +616,7 @@ async function renderSettings() {
         renderEntriesList();
 
         await context.callGenericPopup($container, POPUP_TYPE.TEXT, '', {
-            okButton: 'Done',
+            okButton: '完成',
             cancelButton: false,
             wide: true,
             allowVerticalScrolling: true,
@@ -605,6 +649,6 @@ jQuery(async () => {
             await openLorePicker();
             return '';
         },
-        helpString: 'Opens the Lore Governor entry/lorebook picker for the current chat.',
+        helpString: '打开世界书条目/整本选择器,为当前聊天配置世界书。',
     }));
 });
